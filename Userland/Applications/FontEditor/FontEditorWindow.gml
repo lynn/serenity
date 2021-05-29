@@ -210,11 +210,6 @@
                     @GUI::Widget {
                         fixed_width: 16
                     }
-
-                    @GUI::ComboBox {
-                        name: "type_combobox"
-                        model_only: true
-                    }
                 }
             }
         }

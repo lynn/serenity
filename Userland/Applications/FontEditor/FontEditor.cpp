@@ -119,7 +119,6 @@ FontEditorWidget::FontEditorWidget(const String& path, RefPtr<Gfx::BitmapFont>&&
     m_family_textbox = *find_descendant_of_type_named<GUI::TextBox>("family_textbox");
     m_presentation_spinbox = *find_descendant_of_type_named<GUI::SpinBox>("presentation_spinbox");
     m_weight_combobox = *find_descendant_of_type_named<GUI::ComboBox>("weight_combobox");
-    m_type_combobox = *find_descendant_of_type_named<GUI::ComboBox>("type_combobox");
     m_spacing_spinbox = *find_descendant_of_type_named<GUI::SpinBox>("spacing_spinbox");
     m_mean_line_spinbox = *find_descendant_of_type_named<GUI::SpinBox>("mean_line_spinbox");
     m_baseline_spinbox = *find_descendant_of_type_named<GUI::SpinBox>("baseline_spinbox");
@@ -181,7 +180,7 @@ FontEditorWidget::FontEditorWidget(const String& path, RefPtr<Gfx::BitmapFont>&&
             if (parts.size() > 1)
                 weight = String::formatted("{}{}", parts[0], parts[1]);
 
-            RefPtr<Gfx::BitmapFont> new_font = Gfx::BitmapFont::create(metadata.glyph_height, metadata.glyph_width, metadata.is_fixed_width, metadata.type);
+            RefPtr<Gfx::BitmapFont> new_font = Gfx::BitmapFont::create(metadata.glyph_height, metadata.glyph_width, metadata.is_fixed_width, 256);
             String path = String::formatted("{}{}{}.font", name, weight, metadata.presentation_size);
             if (!new_font) {
                 String message = String::formatted("Failed to create new font: {}\n", path);
@@ -412,12 +411,6 @@ FontEditorWidget::FontEditorWidget(const String& path, RefPtr<Gfx::BitmapFont>&&
         did_modify_font();
     };
 
-    m_type_combobox->on_change = [this](auto&, const auto& index) {
-        m_edited_font->set_type(static_cast<Gfx::FontTypes>(index.row()));
-        m_glyph_map_widget->reprobe_font();
-        did_modify_font();
-    };
-
     m_presentation_spinbox->on_change = [this, update_demo](int value) {
         m_edited_font->set_presentation_size(value);
         update_demo();
@@ -502,16 +495,6 @@ void FontEditorWidget::initialize(const String& path, RefPtr<Gfx::BitmapFont>&& 
         }
         i++;
     }
-
-    m_font_type_list.clear();
-    StringBuilder type_count;
-    for (int i = 0; i < Gfx::FontTypes::__Count; i++) {
-        type_count.appendff("{}", Gfx::BitmapFont::type_name_by_type(static_cast<Gfx::FontTypes>(i)));
-        m_font_type_list.append(type_count.to_string());
-        type_count.clear();
-    }
-    m_type_combobox->set_model(*GUI::ItemListModel<String>::create(m_font_type_list));
-    m_type_combobox->set_selected_index(m_edited_font->type());
 
     m_fixed_width_checkbox->set_checked(m_edited_font->is_fixed_width());
 
