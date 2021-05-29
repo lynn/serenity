@@ -16,20 +16,10 @@
 
 namespace Gfx {
 
-// Note: Perhaps put glyph count directly in header
-// and sidestep FontType conflation/sync maintenance
-enum FontTypes {
-    Default = 0,
-    LatinExtendedA,
-    Cyrillic,
-    Hebrew,
-    __Count
-};
-
 class BitmapFont : public Font {
 public:
     NonnullRefPtr<Font> clone() const;
-    static NonnullRefPtr<BitmapFont> create(u8 glyph_height, u8 glyph_width, bool fixed, FontTypes type);
+    static NonnullRefPtr<BitmapFont> create(u8 glyph_height, u8 glyph_width, bool fixed, size_t glyph_count);
 
     static RefPtr<BitmapFont> load_from_file(String const& path);
     bool write_to_file(String const& path);
@@ -90,9 +80,7 @@ public:
     }
 
     size_t glyph_count() const { return m_glyph_count; }
-
-    FontTypes type() { return m_type; }
-    void set_type(FontTypes type);
+    void ensure_space_for(u32 code_point);
 
     String family() const { return m_family; }
     void set_family(String family) { m_family = move(family); }
@@ -102,11 +90,8 @@ public:
 
     const Font& bold_variant() const;
 
-    static size_t glyph_count_by_type(FontTypes type);
-    static String type_name_by_type(FontTypes type);
-
 private:
-    BitmapFont(String name, String family, unsigned* rows, u8* widths, bool is_fixed_width, u8 glyph_width, u8 glyph_height, u8 glyph_spacing, FontTypes type, u8 baseline, u8 mean_line, u8 presentation_size, u16 weight, bool owns_arrays = false);
+    BitmapFont(String name, String family, u32* rows, u8* widths, bool is_fixed_width, u8 glyph_width, u8 glyph_height, u8 glyph_spacing, u16 range_mask_size, u8* range_mask, u8 baseline, u8 mean_line, u8 presentation_size, u16 weight, bool owns_arrays = false);
 
     static RefPtr<BitmapFont> load_from_memory(const u8*);
 
@@ -114,10 +99,11 @@ private:
 
     String m_name;
     String m_family;
-    FontTypes m_type;
-    size_t m_glyph_count { 256 };
+    u16 m_range_mask_size;
+    u8* m_range_mask;
+    size_t m_glyph_count;
 
-    unsigned* m_rows { nullptr };
+    u32* m_rows { nullptr };
     u8* m_glyph_widths { nullptr };
     RefPtr<MappedFile> m_mapped_file;
 

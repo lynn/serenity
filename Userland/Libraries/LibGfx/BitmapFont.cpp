@@ -26,7 +26,7 @@ struct [[gnu::packed]] FontFileHeader {
     char magic[4];
     u8 glyph_width;
     u8 glyph_height;
-    u8 type;
+    u16 range_mask_size;
     u8 is_variable_width;
     u8 glyph_spacing;
     u8 baseline;
@@ -38,33 +38,38 @@ struct [[gnu::packed]] FontFileHeader {
     u16 unused;
 };
 
-static_assert(sizeof(FontFileHeader) == 80);
+static_assert(sizeof(FontFileHeader) == 81);
 
 NonnullRefPtr<Font> BitmapFont::clone() const
 {
     size_t bytes_per_glyph = sizeof(u32) * glyph_height();
-    auto* new_rows = static_cast<unsigned*>(malloc(bytes_per_glyph * m_glyph_count));
+    auto* new_rows = static_cast<u32*>(malloc(bytes_per_glyph * m_glyph_count));
     memcpy(new_rows, m_rows, bytes_per_glyph * m_glyph_count);
     auto* new_widths = static_cast<u8*>(malloc(m_glyph_count));
     memcpy(new_widths, m_glyph_widths, m_glyph_count);
-    return adopt_ref(*new BitmapFont(m_name, m_family, new_rows, new_widths, m_fixed_width, m_glyph_width, m_glyph_height, m_glyph_spacing, m_type, m_baseline, m_mean_line, m_presentation_size, m_weight, true));
+    auto* new_range_mask = static_cast<u8*>(malloc(m_range_mask_size));
+    memcpy(new_range_mask, m_range_mask, m_range_mask_size);
+    return adopt_ref(*new BitmapFont(m_name, m_family, new_rows, new_widths, m_fixed_width, m_glyph_width, m_glyph_height, m_glyph_spacing, m_range_mask_size, new_range_mask, m_baseline, m_mean_line, m_presentation_size, m_weight, true));
 }
 
-NonnullRefPtr<BitmapFont> BitmapFont::create(u8 glyph_height, u8 glyph_width, bool fixed, FontTypes type)
+NonnullRefPtr<BitmapFont> BitmapFont::create(u8 glyph_height, u8 glyph_width, bool fixed, size_t glyph_count)
 {
+    VERIFY(glyph_count <= 0x110000);
     size_t bytes_per_glyph = sizeof(u32) * glyph_height;
-    size_t count = glyph_count_by_type(type);
-    auto* new_rows = static_cast<unsigned*>(malloc(bytes_per_glyph * count));
-    memset(new_rows, 0, bytes_per_glyph * count);
-    auto* new_widths = static_cast<u8*>(malloc(count));
-    memset(new_widths, 0, count);
-    return adopt_ref(*new BitmapFont("Untitled", "Untitled", new_rows, new_widths, fixed, glyph_width, glyph_height, 1, type, 0, 0, 0, 400, true));
+    auto* new_rows = static_cast<u32*>(malloc(bytes_per_glyph * glyph_count));
+    memset(new_rows, 0, bytes_per_glyph * glyph_count);
+    auto* new_widths = static_cast<u8*>(malloc(glyph_count));
+    memset(new_widths, 0, glyph_count);
+    u16 range_mask_size = ceil_div(glyph_count, 8 * 256);
+    auto* new_range_mask = static_cast<u8*>(malloc(range_mask_size));
+    return adopt_ref(*new BitmapFont("Untitled", "Untitled", new_rows, new_widths, fixed, glyph_width, glyph_height, 1, range_mask_size, new_range_mask, 0, 0, 0, 400, true));
 }
 
-BitmapFont::BitmapFont(String name, String family, unsigned* rows, u8* widths, bool is_fixed_width, u8 glyph_width, u8 glyph_height, u8 glyph_spacing, FontTypes type, u8 baseline, u8 mean_line, u8 presentation_size, u16 weight, bool owns_arrays)
+BitmapFont::BitmapFont(String name, String family, u32* rows, u8* widths, bool is_fixed_width, u8 glyph_width, u8 glyph_height, u8 glyph_spacing, u16 range_mask_size, u8* range_mask, u8 baseline, u8 mean_line, u8 presentation_size, u16 weight, bool owns_arrays)
     : m_name(name)
     , m_family(family)
-    , m_type(type)
+    , m_range_mask_size(range_mask_size)
+    , m_range_mask(range_mask)
     , m_rows(rows)
     , m_glyph_widths(widths)
     , m_glyph_width(glyph_width)
@@ -79,12 +84,16 @@ BitmapFont::BitmapFont(String name, String family, unsigned* rows, u8* widths, b
     , m_fixed_width(is_fixed_width)
     , m_owns_arrays(owns_arrays)
 {
+    VERIFY(m_range_mask);
     VERIFY(m_rows);
     VERIFY(m_glyph_widths);
 
     update_x_height();
 
-    m_glyph_count = glyph_count_by_type(m_type);
+    m_glyph_count = 0;
+    for (size_t i = 0; i < m_range_mask_size; ++i) {
+        m_glyph_count += 256 * __builtin_popcount(m_range_mask[i]);
+    }
 
     if (!m_fixed_width) {
         u8 maximum = 0;
@@ -109,8 +118,8 @@ BitmapFont::~BitmapFont()
 RefPtr<BitmapFont> BitmapFont::load_from_memory(const u8* data)
 {
     auto& header = *reinterpret_cast<const FontFileHeader*>(data);
-    if (memcmp(header.magic, "!Fnt", 4)) {
-        dbgln("header.magic != '!Fnt', instead it's '{:c}{:c}{:c}{:c}'", header.magic[0], header.magic[1], header.magic[2], header.magic[3]);
+    if (memcmp(header.magic, "+Fnt", 4)) {
+        dbgln("header.magic != '+Fnt', instead it's '{:c}{:c}{:c}{:c}'", header.magic[0], header.magic[1], header.magic[2], header.magic[3]);
         return nullptr;
     }
     if (header.name[sizeof(header.name) - 1] != '\0') {
@@ -123,60 +132,16 @@ RefPtr<BitmapFont> BitmapFont::load_from_memory(const u8* data)
         return nullptr;
     }
 
-    FontTypes type;
-    if (header.type == 0)
-        type = FontTypes::Default;
-    else if (header.type == 1)
-        type = FontTypes::LatinExtendedA;
-    else if (header.type == 2)
-        type = FontTypes::Cyrillic;
-    else if (header.type == 3)
-        type = FontTypes::Hebrew;
-    else
-        VERIFY_NOT_REACHED();
+    size_t bytes_per_glyph = sizeof(u32) * header.glyph_height;
 
-    size_t count = glyph_count_by_type(type);
-    size_t bytes_per_glyph = sizeof(unsigned) * header.glyph_height;
-
-    auto* rows = const_cast<unsigned*>((const unsigned*)(data + sizeof(FontFileHeader)));
+    u8* range_mask = const_cast<u8*>(data + sizeof(FontFileHeader));
+    size_t count = 0;
+    for (size_t i = 0; i < header.range_mask_size; ++i) {
+        count += 256 * __builtin_popcount(range_mask[i]);
+    }
+    u32* rows = (u32*)(range_mask + sizeof(FontFileHeader));
     u8* widths = (u8*)(rows) + count * bytes_per_glyph;
-    return adopt_ref(*new BitmapFont(String(header.name), String(header.family), rows, widths, !header.is_variable_width, header.glyph_width, header.glyph_height, header.glyph_spacing, type, header.baseline, header.mean_line, header.presentation_size, header.weight));
-}
-
-size_t BitmapFont::glyph_count_by_type(FontTypes type)
-{
-    if (type == FontTypes::Default)
-        return 256;
-
-    if (type == FontTypes::LatinExtendedA)
-        return 384;
-
-    if (type == FontTypes::Cyrillic)
-        return 1280;
-
-    if (type == FontTypes::Hebrew)
-        return 1536;
-
-    dbgln("Unknown font type: {}", (int)type);
-    VERIFY_NOT_REACHED();
-}
-
-String BitmapFont::type_name_by_type(FontTypes type)
-{
-    if (type == FontTypes::Default)
-        return "Default";
-
-    if (type == FontTypes::LatinExtendedA)
-        return "LatinExtendedA";
-
-    if (type == FontTypes::Cyrillic)
-        return "Cyrillic";
-
-    if (type == FontTypes::Hebrew)
-        return "Hebrew";
-
-    dbgln("Unknown font type: {}", (int)type);
-    VERIFY_NOT_REACHED();
+    return adopt_ref(*new BitmapFont(String(header.name), String(header.family), rows, widths, !header.is_variable_width, header.glyph_width, header.glyph_height, header.glyph_spacing, header.range_mask_size, range_mask, header.baseline, header.mean_line, header.presentation_size, header.weight));
 }
 
 RefPtr<BitmapFont> BitmapFont::load_from_file(String const& path)
@@ -203,7 +168,7 @@ bool BitmapFont::write_to_file(String const& path)
     memcpy(header.magic, "!Fnt", 4);
     header.glyph_width = m_glyph_width;
     header.glyph_height = m_glyph_height;
-    header.type = m_type;
+    header.range_mask_size = m_range_mask_size;
     header.baseline = m_baseline;
     header.mean_line = m_mean_line;
     header.is_variable_width = !m_fixed_width;
@@ -213,8 +178,7 @@ bool BitmapFont::write_to_file(String const& path)
     memcpy(header.name, m_name.characters(), min(m_name.length(), sizeof(header.name) - 1));
     memcpy(header.family, m_family.characters(), min(m_family.length(), sizeof(header.family) - 1));
 
-    size_t bytes_per_glyph = sizeof(unsigned) * m_glyph_height;
-    size_t count = glyph_count_by_type(m_type);
+    size_t bytes_per_glyph = sizeof(u32) * m_glyph_height;
 
     auto stream_result = Core::OutputFileStream::open_buffered(path);
     if (stream_result.is_error())
@@ -222,8 +186,9 @@ bool BitmapFont::write_to_file(String const& path)
     auto& stream = stream_result.value();
 
     stream << ReadonlyBytes { &header, sizeof(header) };
-    stream << ReadonlyBytes { m_rows, count * bytes_per_glyph };
-    stream << ReadonlyBytes { m_glyph_widths, count };
+    stream << ReadonlyBytes { m_range_mask, m_range_mask_size };
+    stream << ReadonlyBytes { m_rows, m_glyph_count * bytes_per_glyph };
+    stream << ReadonlyBytes { m_glyph_widths, m_glyph_count };
 
     stream.flush();
     if (stream.handle_any_error())
@@ -291,36 +256,44 @@ int BitmapFont::width(const Utf32View& view) const
     return width;
 }
 
-void BitmapFont::set_type(FontTypes type)
+void BitmapFont::ensure_space_for(u32 code_point)
 {
-    if (type == m_type)
+    auto i = code_point / 256;
+    auto bit = 1 << (i % 8);
+    if (i / 8 < m_range_mask_size && m_range_mask[i / 8] & bit != 0)
         return;
 
-    if (type == FontTypes::Default)
-        return;
-
-    size_t new_glyph_count = glyph_count_by_type(type);
-    if (new_glyph_count <= m_glyph_count) {
-        m_glyph_count = new_glyph_count;
-        return;
+    if (i / 8 >= m_range_mask_size) {
+        auto new_range_mask_size = ceil_div(i, 8);
+        auto* new_range_mask = kmalloc(new_range_mask_size);
+        memset(new_range_mask, (u8)0, new_range_mask_size);
+        memcpy(new_range_mask, m_range_mask, m_range_mask_size);
+        kfree(m_range_mask);
+        m_range_mask_size = new_range_mask_size;
     }
 
-    int item_count_to_copy = min(m_glyph_count, new_glyph_count);
+    VERIFY(m_range_mask[i / 8] & bit == 0);
+    m_range_mask[i / 8] |= bit;
 
+    auto new_glyph_count = m_glyph_count + 256;
+
+    // Insert a range of 256 blank glyphs at the new position.
     size_t bytes_per_glyph = sizeof(u32) * glyph_height();
+    auto k = bytes_per_glyph * 256;
+    auto* new_rows = static_cast<u32*>(kmalloc(bytes_per_glyph * new_glyph_count));
+    memcpy(((u8*)new_rows), m_rows, i * k);
+    memset(((u8*)new_rows) + i * k, 0, k);
+    memcpy(((u8*)new_rows) + (i + 1) * k, m_rows + i * k, (m_glyph_count / 256 - i) * k);
 
-    auto* new_rows = static_cast<unsigned*>(kmalloc(bytes_per_glyph * new_glyph_count));
-    memset(new_rows, (unsigned)0, bytes_per_glyph * new_glyph_count);
-    memcpy(new_rows, m_rows, bytes_per_glyph * item_count_to_copy);
-
+    // Insert a range of 256 blank glyph widths at the new position.
     auto* new_widths = static_cast<u8*>(kmalloc(new_glyph_count));
-    memset(new_widths, (u8)0, new_glyph_count);
-    memcpy(new_widths, m_glyph_widths, item_count_to_copy);
+    memcpy(new_widths, m_glyph_widths, i * 256);
+    memset(new_widths + i * 256, 0, 256);
+    memcpy(new_widths + (i + 1) * 256, m_glyph_widths + i * 256, (m_glyph_count / 256 - i) * 256);
 
     kfree(m_rows);
     kfree(m_glyph_widths);
 
-    m_type = type;
     m_glyph_count = new_glyph_count;
     m_rows = new_rows;
     m_glyph_widths = new_widths;
