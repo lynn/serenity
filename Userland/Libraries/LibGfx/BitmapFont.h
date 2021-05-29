@@ -33,14 +33,15 @@ public:
     void set_weight(u16 weight) { m_weight = weight; }
 
     Glyph glyph(u32 code_point) const;
-    bool contains_glyph(u32 code_point) const { return code_point < (u32)glyph_count() && m_glyph_widths[code_point] > 0; }
+    bool contains_glyph(u32 code_point) const;
 
-    u8 glyph_width(size_t ch) const { return m_fixed_width ? m_glyph_width : m_glyph_widths[ch]; }
+    Optional<size_t> glyph_index(u32 code_point) const;
+    u8 glyph_width(u32 code_point) const;
     int glyph_or_emoji_width(u32 code_point) const;
     u8 glyph_height() const { return m_glyph_height; }
     int x_height() const { return m_x_height; }
 
-    u8 raw_glyph_width(size_t ch) const { return m_glyph_widths[ch]; }
+    u8 raw_glyph_width(u32 code_point) const { return m_glyph_widths[code_point]; }
 
     u8 min_glyph_width() const { return m_min_glyph_width; }
     u8 max_glyph_width() const { return m_max_glyph_width; }
@@ -73,10 +74,10 @@ public:
     u8 glyph_spacing() const { return m_glyph_spacing; }
     void set_glyph_spacing(u8 spacing) { m_glyph_spacing = spacing; }
 
-    void set_glyph_width(size_t ch, u8 width)
+    void set_glyph_width(u32 code_point, u8 width)
     {
         VERIFY(m_glyph_widths);
-        m_glyph_widths[ch] = width;
+        m_glyph_widths[code_point] = width;
     }
 
     size_t glyph_count() const { return m_glyph_count; }
@@ -102,6 +103,9 @@ private:
     u16 m_range_mask_size;
     u8* m_range_mask;
     size_t m_glyph_count;
+
+    // A look-up table mapping codepoint/256 (a range number) to the position of that range in the font data.
+    Vector<size_t> m_range_positions;
 
     u32* m_rows { nullptr };
     u8* m_glyph_widths { nullptr };

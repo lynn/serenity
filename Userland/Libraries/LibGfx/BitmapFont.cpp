@@ -91,8 +91,17 @@ BitmapFont::BitmapFont(String name, String family, u32* rows, u8* widths, bool i
     update_x_height();
 
     m_glyph_count = 0;
-    for (size_t i = 0; i < m_range_mask_size; ++i) {
-        m_glyph_count += 256 * __builtin_popcount(m_range_mask[i]);
+    m_range_positions = Vector<size_t>(); // TODO: make this an array, for perf?
+    for (size_t i = 0, p = 0; i < m_range_mask_size; ++i) {
+        for (size_t j = 0; j < 8; ++j) {
+            if (m_range_mask[i] & (1 << j)) {
+                m_glyph_count += 256;
+                m_range_positions.append(p++);
+            } else {
+                // Append a dummy value.
+                m_range_positions.append(size_t(-1));
+            }
+        }
     }
 
     if (!m_fixed_width) {
@@ -165,7 +174,7 @@ bool BitmapFont::write_to_file(String const& path)
 {
     FontFileHeader header;
     memset(&header, 0, sizeof(FontFileHeader));
-    memcpy(header.magic, "!Fnt", 4);
+    memcpy(header.magic, "+Fnt", 4);
     header.glyph_width = m_glyph_width;
     header.glyph_height = m_glyph_height;
     header.range_mask_size = m_range_mask_size;
@@ -199,12 +208,35 @@ bool BitmapFont::write_to_file(String const& path)
 
 Glyph BitmapFont::glyph(u32 code_point) const
 {
-    auto width = glyph_width(code_point);
+    auto index = glyph_index(code_point);
+    auto width = m_glyph_widths[index.value()];
     return Glyph(
-        GlyphBitmap(&m_rows[code_point * m_glyph_height], { width, m_glyph_height }),
+        GlyphBitmap(&m_rows[index.value() * m_glyph_height], { width, m_glyph_height }),
         0,
         width,
         m_glyph_height);
+}
+
+bool BitmapFont::contains_glyph(u32 code_point) const
+{
+    return glyph_width(code_point) > 0;
+}
+
+Optional<size_t> BitmapFont::glyph_index(u32 code_point) const
+{
+    auto range = code_point / 256;
+    if (range >= m_range_positions.size())
+        return {};
+    auto pos = m_range_positions[range];
+    if (pos == size_t(-1))
+        return {};
+    return pos * 256 + code_point % 256;
+}
+
+u8 BitmapFont::glyph_width(u32 code_point) const
+{
+    auto index = glyph_index(code_point);
+    return index.has_value() ? m_glyph_widths[index.value()] : 0;
 }
 
 int BitmapFont::glyph_or_emoji_width(u32 code_point) const
@@ -260,7 +292,7 @@ void BitmapFont::ensure_space_for(u32 code_point)
 {
     auto i = code_point / 256;
     auto bit = 1 << (i % 8);
-    if (i / 8 < m_range_mask_size && m_range_mask[i / 8] & bit != 0)
+    if (i / 8 < m_range_mask_size && (m_range_mask[i / 8] & bit) != 0)
         return;
 
     if (i / 8 >= m_range_mask_size) {
@@ -270,9 +302,12 @@ void BitmapFont::ensure_space_for(u32 code_point)
         memcpy(new_range_mask, m_range_mask, m_range_mask_size);
         kfree(m_range_mask);
         m_range_mask_size = new_range_mask_size;
+        while (m_range_positions.size() < new_range_mask_size) {
+            m_range_positions.append(size_t(-1));
+        }
     }
 
-    VERIFY(m_range_mask[i / 8] & bit == 0);
+    VERIFY((m_range_mask[i / 8] & bit) == 0);
     m_range_mask[i / 8] |= bit;
 
     auto new_glyph_count = m_glyph_count + 256;
@@ -290,6 +325,22 @@ void BitmapFont::ensure_space_for(u32 code_point)
     memcpy(new_widths, m_glyph_widths, i * 256);
     memset(new_widths + i * 256, 0, 256);
     memcpy(new_widths + (i + 1) * 256, m_glyph_widths + i * 256, (m_glyph_count / 256 - i) * 256);
+
+    // Update the range-positions lookup table.
+    {
+        size_t j = 0, next = 0;
+        for (auto& p : m_range_positions) {
+            if (i < j) {
+                if (p == next)
+                    ++next;
+            } else if (i == j) {
+                p = next;
+            } else {
+                p += (p != size_t(-1));
+            }
+            j++;
+        }
+    }
 
     kfree(m_rows);
     kfree(m_glyph_widths);
