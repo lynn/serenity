@@ -148,7 +148,8 @@ RefPtr<BitmapFont> BitmapFont::load_from_memory(const u8* data)
     for (size_t i = 0; i < header.range_mask_size; ++i) {
         count += 256 * __builtin_popcount(range_mask[i]);
     }
-    u32* rows = (u32*)(range_mask + sizeof(FontFileHeader));
+
+    u32* rows = (u32*)(range_mask + header.range_mask_size);
     u8* widths = (u8*)(rows) + count * bytes_per_glyph;
     return adopt_ref(*new BitmapFont(String(header.name), String(header.family), rows, widths, !header.is_variable_width, header.glyph_width, header.glyph_height, header.glyph_spacing, header.range_mask_size, range_mask, header.baseline, header.mean_line, header.presentation_size, header.weight));
 }
@@ -225,11 +226,13 @@ bool BitmapFont::contains_glyph(u32 code_point) const
 Optional<size_t> BitmapFont::glyph_index(u32 code_point) const
 {
     auto range = code_point / 256;
-    if (range >= m_range_positions.size())
+    if (range >= m_range_positions.size()) {
         return {};
+    }
     auto pos = m_range_positions[range];
-    if (pos == size_t(-1))
+    if (pos == size_t(-1)) {
         return {};
+    }
     return pos * 256 + code_point % 256;
 }
 

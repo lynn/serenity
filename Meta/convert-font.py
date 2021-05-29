@@ -39,7 +39,7 @@ def convert_font(font):
             if byte & (1 << j):
                 k = 8*i + j
                 new_rows += rows[k*256*bpg:(k+1)*256*bpg].ljust(256*bpg, b'\0')
-                new_widths += rows[k*256:(k+1)*256].ljust(256, b'\0')
+                new_widths += widths[k*256:(k+1)*256].ljust(256, b'\0')
 
     bits_set = sum(bin(b).count('1') for b in range_mask)
     assert len(range_mask) == rmsz
